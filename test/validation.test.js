@@ -15,7 +15,9 @@ import { tmpdir } from 'node:os'
 
 import { createHarness } from 'mikser-io/testing/harness.js'
 import { schemas } from '../index.js'
-import { useService } from 'mikser-io'
+import { useService, constants } from 'mikser-io'
+
+const { ACTION } = constants
 
 const ARTICLE_SCHEMA = `
 import { z } from 'zod'
@@ -198,6 +200,66 @@ describe('the silent-skip guards', () => {
             await h.validate({ entity: { id: '/documents/a.md', meta: { layout: 'article', title: 'Hello' } } })
             await h.runHook('finalized')
             assert.doesNotMatch(said(h, 'warn'), /article/)
+        })
+    })
+
+    it('a schema resolved through lookup() counts as used', async () => {
+        // schemaKey is not the only way a schema gets used. mikser-io-ocr
+        // dispatches extraction by schema NAME through the `schemas`
+        // service, so the schema can do its entire job without a single
+        // entity naming it in front-matter. Reported from a real build:
+        // ocr resolved 'janus-report', extracted with it, and the build
+        // still closed with "never matched any entity — check schemaKey",
+        // pointing at a mechanism that was not in play.
+        await withPlugin({
+            schemaFiles: { 'article.js': ARTICLE_SCHEMA },
+            options: { schemaKey: 'meta.layout' },
+        }, async (h) => {
+            assert.ok(useService('schemas').lookup('article'), 'precondition: it resolves')
+            await h.runHook('finalized')
+            assert.doesNotMatch(said(h, 'warn'), /never matched/,
+                'resolving a schema by name is using it')
+        })
+    })
+
+    it('a lookup that misses does not pre-mark the name as used', async () => {
+        // Under --watch a schema file can be written after something asked
+        // for it: a consumer looks up 'article', gets nothing, the author
+        // then adds schemas/article.js. Marking the name on the way past
+        // would bank that miss and suppress the warning for the schema that
+        // arrives later — which is the one the guard is there for.
+        await withPlugin({
+            schemaFiles: {},
+            options: { schemaKey: 'meta.layout' },
+        }, async (h, root) => {
+            assert.equal(useService('schemas').lookup('article'), undefined,
+                'precondition: nothing to resolve yet')
+
+            await writeFile(path.join(root, 'schemas', 'article.js'), ARTICLE_SCHEMA)
+            await h.runSync('schemas', {
+                action: ACTION.CREATE,
+                context: { relativePath: 'article.js' },
+            })
+            assert.ok(useService('schemas').names().includes('article'),
+                'precondition: the watch add registered it')
+
+            await h.runHook('finalized')
+            assert.match(said(h, 'warn'), /never matched/,
+                'a schema added after a failed lookup is still unused')
+        })
+    })
+
+    it('listing the names is not using them', async () => {
+        // names() is inspection — MCP tooling calls it to answer "what is
+        // available". If that counted as use, one debug call would switch
+        // the guard off for the whole build.
+        await withPlugin({
+            schemaFiles: { 'article.js': ARTICLE_SCHEMA },
+            options: { schemaKey: 'meta.layout' },
+        }, async (h) => {
+            assert.deepEqual(useService('schemas').names(), ['article'])
+            await h.runHook('finalized')
+            assert.match(said(h, 'warn'), /never matched/)
         })
     })
 

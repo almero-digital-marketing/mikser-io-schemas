@@ -331,7 +331,19 @@ export function schemas(options = {}) {
         // Return the registered zod schema for `name`, or undefined.
         // Lookup is by the filename stem (`schemas/article.js` → 'article').
         lookup(name) {
-            return schemas[name]?.schema
+            const definition = schemas[name]
+            if (!definition) return undefined
+            // A schema someone resolved by name is in use, even though no
+            // front-matter names it through `schemaKey`. Without this, the
+            // unused-schema warning fired at every consumer listed above:
+            // mikser-io-ocr dispatches extraction by schema NAME, so the
+            // schema does its whole job through this call and never touches
+            // `schemaIssues` — and the build closed by advising the user to
+            // check a `schemaKey` that was not the mechanism in play. A
+            // warning that cannot be acted on teaches people to ignore the
+            // ones that can.
+            usedSchemas.add(name)
+            return definition.schema
         },
         // List every loaded schema name. Useful for "what schemas are
         // available" inspection from MCP / debug tooling.
