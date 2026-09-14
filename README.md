@@ -229,6 +229,13 @@ For "which entities reference this one?", "what does this entity link to?", and 
 - **One schema file per layout**, named after the layout: `schemas/article.js`, `schemas/product.js`, etc.
 - **Default export is the Zod schema.** No registration boilerplate.
 - **Optional `revision`** export — bump to invalidate the type cache deliberately. (mikser's journal handles incremental builds normally, but this gives you a manual override if needed.)
+- **Optional `external`** export — `export const external = true` when the
+  schema is consumed by something that imports the file directly rather than
+  through `schemaKey` front-matter or the `schemas` service. Without it the
+  build closes by reporting the schema as unused, which is accurate about
+  what the registry observed and wrong about what to do. Must be exactly
+  `true`: a truthy value would let a typo switch the guard off while reading
+  as a denial.
 - **HMR**: edit a schema file while `mikser --watch` is running and the plugin re-loads it, re-validates affected entities, and re-emits the `.d.ts`.
 
 ## Configuration reference

@@ -19,6 +19,14 @@ import { useService, constants } from 'mikser-io'
 
 const { ACTION } = constants
 
+// A schema whose consumer imports it directly, so the registry never sees
+// it match anything.
+const EXTERNAL_SCHEMA = `
+import { z } from 'zod'
+export const external = true
+export default z.object({ patient: z.string(), findings: z.array(z.string()) })
+`
+
 const ARTICLE_SCHEMA = `
 import { z } from 'zod'
 export default z.object({
@@ -217,7 +225,7 @@ describe('the silent-skip guards', () => {
         }, async (h) => {
             assert.ok(useService('schemas').lookup('article'), 'precondition: it resolves')
             await h.runHook('finalized')
-            assert.doesNotMatch(said(h, 'warn'), /never matched/,
+            assert.doesNotMatch(said(h, 'warn'), /nothing in this build matched it/,
                 'resolving a schema by name is using it')
         })
     })
@@ -244,7 +252,7 @@ describe('the silent-skip guards', () => {
                 'precondition: the watch add registered it')
 
             await h.runHook('finalized')
-            assert.match(said(h, 'warn'), /never matched/,
+            assert.match(said(h, 'warn'), /nothing in this build matched it/,
                 'a schema added after a failed lookup is still unused')
         })
     })
@@ -259,7 +267,53 @@ describe('the silent-skip guards', () => {
         }, async (h) => {
             assert.deepEqual(useService('schemas').names(), ['article'])
             await h.runHook('finalized')
-            assert.match(said(h, 'warn'), /never matched/)
+            assert.match(said(h, 'warn'), /nothing in this build matched it/)
+        })
+    })
+
+    it('a schema marked external is not reported as unused', async () => {
+        // The case lookup() cannot cover: a plugin that imports the schema
+        // file directly does its whole job without the registry seeing
+        // anything. Reported by a consumer whose extraction plugin does
+        // exactly that — the warning fired on every build, was accurate
+        // about what it observed, and its advice was wrong for them.
+        await withPlugin({
+            schemaFiles: { 'janus-report.js': EXTERNAL_SCHEMA },
+            options: { schemaKey: 'meta.schema' },
+        }, async (h) => {
+            await h.runHook('finalized')
+            assert.doesNotMatch(said(h, 'warn'), /nothing in this build matched it/,
+                'the schema author has said who consumes it')
+        })
+    })
+
+    it('only `true` marks a schema external, not merely something truthy', async () => {
+        // Strict on purpose. A truthy test would let `export const external =
+        // 'no'` switch the guard off, which is precisely the silent-failure
+        // class this warning exists to catch — and it would do it while
+        // reading as a denial.
+        await withPlugin({
+            schemaFiles: { 'article.js': ARTICLE_SCHEMA.replace('import { z }', "export const external = 'no'\nimport { z }") },
+            options: { schemaKey: 'meta.layout' },
+        }, async (h) => {
+            await h.runHook('finalized')
+            assert.match(said(h, 'warn'), /nothing in this build matched it/,
+                "a string is not a declaration that something consumes this")
+        })
+    })
+
+    it('the warning offers both explanations, since it cannot tell them apart', async () => {
+        // Advice that is wrong for your project is advice you learn to skip,
+        // and this warning exists to catch validation that silently is not
+        // running. So it says what it observed and names both causes.
+        await withPlugin({
+            schemaFiles: { 'article.js': ARTICLE_SCHEMA },
+            options: { schemaKey: 'meta.layout' },
+        }, async (h) => {
+            await h.runHook('finalized')
+            const text = said(h, 'warn')
+            assert.match(text, /schemaKey/, 'still names the front-matter path')
+            assert.match(text, /export const external = true/, 'and the way out for a direct consumer')
         })
     })
 

@@ -302,7 +302,21 @@ export function schemas(options = {}) {
                 )
                 return false
             }
-            schemas[name] = { name, schema, source, revision: mod.revision ?? 1 }
+            // `export const external = true` — this schema is consumed by
+            // something that imports it directly, so the registry will never
+            // see it match an entity and must not call it unused.
+            //
+            // A named export beside `revision`, because the schema's author
+            // is who knows: the file is imported by a plugin's own config,
+            // which the registry cannot see from here. Reported by a
+            // consumer whose extraction plugin imports its schema directly —
+            // the warning fired on every build, was accurate about what it
+            // observed, and its advice was wrong for that project.
+            schemas[name] = {
+                name, schema, source,
+                revision: mod.revision ?? 1,
+                external: mod.external === true,
+            }
             dirty = true
             logger.info('Schema loaded: %s', name)
             return true
@@ -745,7 +759,9 @@ export function schemas(options = {}) {
         // when mode is 'off' (the user opted out explicitly).
         if (mode !== 'off' && Object.keys(schemas).length > 0) {
             const schemaKey = config.schemaKey
-            const unused = Object.keys(schemas).filter(n => !usedSchemas.has(n))
+            const unused = Object.keys(schemas)
+                .filter(n => !usedSchemas.has(n))
+                .filter(n => !schemas[n]?.external)
             for (const name of unused) {
                 if (!schemaKey) {
                     logger.warn(
@@ -753,8 +769,20 @@ export function schemas(options = {}) {
                         name,
                     )
                 } else {
+                    // Phrased as what was OBSERVED, with both explanations,
+                    // because the registry cannot tell them apart: a schema
+                    // consumed by a plugin that imported it directly does its
+                    // whole job without the registry seeing anything, and
+                    // telling that author to check `schemaKey` sends them
+                    // after a mechanism they are not using. A warning whose
+                    // advice is wrong for your project is one you learn to
+                    // skip — and this one is here to catch validation that
+                    // silently is not running.
                     logger.warn(
-                        'Schema "%s" loaded but never matched any entity — check `schemaKey` (currently \'%s\') or verify front-matter declares { %s: \'%s\' }',
+                        'Schema "%s" loaded but nothing in this build matched it. If it is meant to validate '
+                        + 'front-matter, check `schemaKey` (currently \'%s\') and that documents declare '
+                        + '{ %s: \'%s\' }. If it is consumed directly by a plugin that imports it, add '
+                        + '`export const external = true` to the schema file and this will stop.',
                         name, schemaKey, schemaKey.replace(/^meta\./, ''), name,
                     )
                 }
